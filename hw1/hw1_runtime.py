@@ -22,6 +22,11 @@ GPU_SPECS = {
         "peak_flops": 91.6e12,  # 91.6 TFLOP/s FP32
         "peak_bw": 864e9,  # 864 GB/s GDDR6 bandwidth
     },
+    "T4": {
+        "label": "NVIDIA Tesla T4",
+        "peak_flops": 8.1e12, # 8.1 TFLOP/s FP32,
+        "peak_bw": 320e9, # 320 GB/s HBM bandwidth 
+    }
 }
 
 

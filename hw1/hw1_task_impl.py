@@ -13,7 +13,7 @@ import torch
 def lowest_ai_fn(x: torch.Tensor) -> torch.Tensor:
     """Lowest arithmetic intensity baseline (0 FLOP/Byte)."""
     # TODO (1 line): implement a lowest-AI op
-    pass
+    return x + 0.0
 
 
 # TASK 1b: Implement a function with configurable arithmetic intensity.
@@ -37,10 +37,14 @@ def make_compute_fn(num_ops: int, compiled: bool = True):
     """Return an eager or compiled function whose work scales with num_ops."""
 
     def fn(x: torch.Tensor) -> torch.Tensor:
-        pass
+        acc = 1.0
+        for _ in range(num_ops):
+            acc = acc * x + x
+        return acc
 
     # TODO (1 line): return either `fn` or `torch.compile(fn)` based on `compiled`
-    pass
+    return torch.compile(fn) if compiled else fn
+
 
 
 # ============================================================================
@@ -63,7 +67,21 @@ def benchmark_fn(fn, *args, warmup=25, rep=100) -> float:
     torch.cuda.synchronize()
 
     # TODO: time `rep` runs using CUDA events and return median latency (ms)
-    pass
+    starts = [torch.cuda.Event(enable_timing=True) for _ in range(rep)]
+    ends = [torch.cuda.Event(enable_timing=True) for _ in range(rep)]
+
+    for i in range(rep):
+        starts[i].record()
+        fn(*args)
+        ends[i].record()
+    torch.cuda.synchronize()
+
+    times = [starts[i].elapsed_time(ends[i]) for i in range(rep)]
+    return torch.Tensor(times).median().item()
+
+
+
+
 
 
 # TASK 3: Compute element-wise operation metrics from measured runtime.
@@ -84,25 +102,41 @@ def benchmark_fn(fn, *args, warmup=25, rep=100) -> float:
 
 def compute_elementwise_metrics(num_elements, num_ops, bytes_per_element, ms, variant):
     # TODO: compute total FLOPs, arithmetic intensity, and achieved FLOP/s
-    pass
+    total_flops = 2 * num_ops * num_elements
+    if variant == 'compiled':
+        bytes_moved = 2 * num_elements * bytes_per_element
+    elif variant == 'eager':
+        bytes_moved = (2 * num_ops + 1) * num_elements * bytes_per_element
+
+    ai = total_flops / bytes_moved
+    achieved_flops = total_flops / (ms * 1e-3)
+
     return total_flops, ai, achieved_flops
 
+"""
+============================================================================
+Part 3: Short Writeup
+============================================================================
+Answer these after you generate `results/roofline.png` and inspect the points.
 
-# ============================================================================
-# Part 3: Short Writeup
-# ============================================================================
-# Answer these after you generate `results/roofline.png` and inspect the points.
-#
-# Q1. Look at the compiled element-wise operations from `1 ops` through `64 ops`.
-# Why does performance rise as arithmetic intensity increases even though the
-# measured runtime changes only a little?
-#
-# Q2. In one sample run, `matmul 1024x1024` achieved lower FLOP/s than the
-# `128 ops` compiled element-wise operation. Give one or two reasons why that can
-# happen on a large GPU like an H100.
-#
-# Q3. Between `64 ops` and `128 ops`, runtime increases more noticeably than it
-# did for smaller operations. What does that suggest about what resource is
-# becoming the bottleneck?
-#
-# Q4. Why do the eager `ops-K` points look so different from the compiled ones?
+Q1. Look at the compiled element-wise operations from `1 ops` through `64 ops`.
+Why does performance rise as arithmetic intensity increases even though the
+measured runtime changes only a little?
+
+ANSWER1. The main portion of the times is spent to move the data, so the runtime changes very little. The total number of FLOPs thus increases while the total bytes moved stays the same. 
+
+Q2. In one sample run, `matmul 1024x1024` achieved lower FLOP/s than the
+`128 ops` compiled element-wise operation. Give one or two reasons why that can happen on a large GPU like an H100.
+
+ANSWER2. The 128-ops operation can be fully parallelized on the GPU to occupy all SMs while the 1024x1024 matrix multiplication is done blockwise and does not fill up all SMs on a large GPU like the H100. The number of FLOP/s is thus higher for the 128-ops operation.
+
+
+Q3. Between `64 ops` and `128 ops`, runtime increases more noticeably than it did for smaller operations. What does that suggest about what resource is
+becoming the bottleneck?
+
+ANSWER3. This indicates that we move have stopped being memory bound (the tilting part) and start to become compute bound (the flat part). Compute is thus the new bottleneck. 
+
+Q4. Why do the eager `ops-K` points look so different from the compiled ones?
+
+ANSWER4. Unlike the compiled operations, the eager operations need to transport the data between the GPU core and vRAM for every line of code, making the throughput lower.
+"""
