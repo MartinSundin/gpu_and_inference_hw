@@ -1,0 +1,36 @@
+======================================================================
+HW1: GPU Roofline Model — NVIDIA Tesla T4
+======================================================================
+
+Theoretical specs (FP32):
+  Peak compute:    8 TFLOP/s
+  Peak bandwidth:  0.32 TB/s
+  Ridge point:     25.3 FLOP/Byte
+
+Running benchmarks (first run compiles kernels via torch.compile)...
+  lowest-AI:  2.307 ms | BW: 0.23 TB/s
+    1 ops (   eager): 5.683 ms | AI: 0.167 FLOP/B | 0.02 TFLOP/s
+    1 ops (compiled): 2.127 ms | AI: 0.25 FLOP/B | 0.06 TFLOP/s
+    2 ops (   eager): 12.403 ms | AI: 0.2 FLOP/B | 0.02 TFLOP/s
+    2 ops (compiled): 2.204 ms | AI: 0.5 FLOP/B | 0.12 TFLOP/s
+    4 ops (   eager): 25.819 ms | AI: 0.222 FLOP/B | 0.02 TFLOP/s
+    4 ops (compiled): 2.200 ms | AI: 1 FLOP/B | 0.24 TFLOP/s
+    8 ops (   eager): 52.607 ms | AI: 0.235 FLOP/B | 0.02 TFLOP/s
+    8 ops (compiled): 2.192 ms | AI: 2 FLOP/B | 0.49 TFLOP/s
+   16 ops (   eager): 106.109 ms | AI: 0.242 FLOP/B | 0.02 TFLOP/s
+   16 ops (compiled): 2.179 ms | AI: 4 FLOP/B | 0.99 TFLOP/s
+   32 ops (   eager): 212.703 ms | AI: 0.246 FLOP/B | 0.02 TFLOP/s
+   32 ops (compiled): 2.151 ms | AI: 8 FLOP/B | 2.00 TFLOP/s
+   64 ops (   eager): 424.223 ms | AI: 0.248 FLOP/B | 0.02 TFLOP/s
+   64 ops (compiled): 2.886 ms | AI: 16 FLOP/B | 2.98 TFLOP/s
+  128 ops (   eager): 849.111 ms | AI: 0.249 FLOP/B | 0.02 TFLOP/s
+  128 ops (compiled): 4.186 ms | AI: 32 FLOP/B | 4.10 TFLOP/s
+  matmul 1024×1024: 0.413 ms | AI: 170.7 FLOP/B | 5.20 TFLOP/s
+  matmul 2048×2048: 4.710 ms | AI: 341.3 FLOP/B | 3.65 TFLOP/s
+  matmul 4096×4096: 37.069 ms | AI: 682.7 FLOP/B | 3.71 TFLOP/s
+
+Generating plots...
+
+Roofline plot saved to /content/results/roofline.png
+
+Done! Check the results/ directory for plots.

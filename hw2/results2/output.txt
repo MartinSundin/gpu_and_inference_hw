@@ -1,0 +1,55 @@
+============================================================
+HW2: LLM Inference Optimization
+Model: Tiny random Llama (2 layers, d_model=2048)
+============================================================
+
+--- Part 1: Slow baseline ---
+/usr/local/lib/python3.12/dist-packages/torch/profiler/profiler.py:224: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                        model_inference         0.00%       0.000us         0.00%       0.000us       0.000us        1.267s       113.91%        1.267s        1.267s             1  
+                                        model_inference         1.93%      24.452ms       100.00%        1.270s        1.270s       0.000us         0.00%        1.142s        1.142s             1  
+                                           aten::matmul         0.11%       1.398ms         3.77%      47.929ms     249.631us       0.000us         0.00%     998.627ms       5.201ms           192  
+                                           aten::linear         0.04%     521.363us         1.82%      23.063ms     128.128us       0.000us         0.00%     998.536ms       5.547ms           180  
+                                               aten::mm         0.58%       7.362ms         1.42%      18.014ms     100.077us     980.255ms        88.10%     998.536ms       5.547ms           180  
+                                  volta_sgemm_128x64_tn         0.00%       0.000us         0.00%       0.000us       0.000us     922.040ms        82.87%     922.040ms       5.330ms           173  
+                     aten::scaled_dot_product_attention         0.09%       1.115ms         0.34%       4.280ms     178.317us       0.000us         0.00%      82.666ms       3.444ms            24  
+          aten::_scaled_dot_product_efficient_attention         0.05%     626.721us         0.25%       3.165ms     131.856us       0.000us         0.00%      82.666ms       3.444ms            24  
+                     aten::_efficient_attention_forward         0.03%     388.248us         0.18%       2.322ms      96.763us      73.660ms         6.62%      82.666ms       3.444ms            24  
+fmha_cutlassF_f32_aligned_32x128_gmem_sm75(PyTorchMe...         0.00%       0.000us         0.00%       0.000us       0.000us      73.660ms         6.62%      73.660ms       3.069ms            24  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 1.270s
+Self CUDA time total: 1.113s
+
+Slow: 128 tokens in 11.96s (10.7 tok/s)
+Token preview: [775, 1973, 97, 2453, 295, 695, 775, 866]
+
+--- Part 2: Optimized ---
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                        model_inference         0.00%       0.000us         0.00%       0.000us       0.000us       10.748s      7455.83%       10.748s       10.748s             1  
+                                               aten::mm         0.23%      24.887ms         5.23%     562.121ms     860.828us     108.949ms        75.58%     201.048ms     307.883us           653  
+                                        model_inference         0.08%       8.775ms       100.00%       10.749s       10.749s       0.000us         0.00%     144.418ms     144.418ms             1  
+                                       CompiledFunction         0.02%       2.210ms         0.39%      41.746ms       3.479ms       0.000us         0.00%     143.979ms      11.998ms            12  
+                                     PythonDispatchMode        28.59%        3.073s        67.39%        7.244s       1.167ms       0.000us         0.00%     106.570ms      17.175us          6205  
+                             Torch-Compiled Region: 0/0         0.03%       3.048ms         0.11%      11.422ms      11.422ms       0.000us         0.00%     100.829ms     100.829ms             1  
+## Call CompiledFxGraph fx56aegfh46vfequxfwppmfdmo74...         0.01%       1.583ms         0.07%       7.843ms       7.843ms       0.000us         0.00%     100.829ms     100.829ms             1  
+                                 volta_sgemm_128x128_tn         0.00%       0.000us         0.00%       0.000us       0.000us      61.090ms        42.38%      61.090ms       8.727ms             7  
+          aten::_scaled_dot_product_efficient_attention         0.09%       9.548ms         0.99%     106.883ms       1.697ms       0.000us         0.00%      43.408ms     689.012us            63  
+                             Torch-Compiled Region: 0/2         0.01%       1.293ms         0.28%      29.938ms       2.994ms       0.000us         0.00%      39.017ms       3.902ms            10  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 10.749s
+Self CUDA time total: 144.151ms
+
+Optimized: 128 tokens in 0.53s (243.0 tok/s)
+Token preview: [775, 1973, 97, 2453, 295, 695, 775, 866]
+
+============================================================
+SUMMARY
+============================================================
+  Slow:       11.96s
+  Optimized:   0.53s
+  Speedup:    22.70x  (vs V0 slow baseline)
