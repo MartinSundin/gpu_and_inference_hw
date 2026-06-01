@@ -75,7 +75,7 @@ class CacheManager:
     @property
     def num_free_blocks(self) -> int:
         # TODO
-        raise NotImplementedError
+        return len(self._free)
 
     @property
     def ref_counts(self) -> list[int]:
@@ -101,28 +101,54 @@ class CacheManager:
         """Claim n blocks (ref=1 each). Evicts LRU cache entries if needed.
         Returns None only when eviction cannot free enough blocks."""
         # TODO
-        raise NotImplementedError
+        if len(self._free) < n:
+            self._evict_blocks_from_kv_cache(n - len(self._free))
+
+        if len(self._free) < n:
+            return None
+
+        claimed_blocks = []
+        for _ in range(n):
+            b = self._free.pop()
+            self._ref[b] = 1
+            claimed_blocks.append(b)
+        return claimed_blocks
 
     def free(self, block_ids: list[int]) -> None:
         """Decrement each block's ref; return to the free list when ref reaches 0."""
         # TODO
-        raise NotImplementedError
+        for block_id in block_ids:
+            self._ref[block_id] -= 1
+            if self._ref[block_id] == 0:
+                self._free.append(block_id)
+
 
     def lock(self, handle: CacheHandle) -> None:
         """Pin the matched blocks (incr ref). Must be called before using them."""
         # TODO
-        raise NotImplementedError
+        for block_id in handle.matched_blocks:
+            self._ref[block_id] += 1
+
 
     def unlock(self, handle: CacheHandle) -> None:
         """Release the pin (decr ref). Blocks become evictable when ref drops to 1."""
         # TODO
-        raise NotImplementedError
+        for block_id in handle.matched_blocks:
+            self._ref[block_id] -= 1
+
 
     def match_prefix(self, tokens: list[int]) -> CacheHandle:
         """Longest-prefix lookup. Returns a CacheHandle WITHOUT pinning.
         Updates LRU order on a hit. Returns CacheHandle(0, []) on a miss."""
         # TODO
-        raise NotImplementedError
+        for l in range(len(tokens), 0, -1):
+            key = tuple(tokens[:l]) # try matching the longest prefix first
+            if key in self._cache:
+                self._lru.remove(tuple(key))
+                self._lru.append(tuple(key))
+                return CacheHandle(len(self._cache[key]), self._cache[key])
+        return CacheHandle(0, [])
+
 
     def insert_prefix(self, tokens: list[int], block_ids: list[int]) -> None:
         """Store every complete-block prefix not already cached.
@@ -130,7 +156,17 @@ class CacheManager:
         _ref when _cache_ref goes from 0 → 1 (first cache entry for that block)
         so that overlapping entries share a single ref-count for cache ownership."""
         # TODO
-        raise NotImplementedError
+        if tuple(tokens) in self._cache:
+            return
+
+        self._lru.append(tuple(tokens))
+        self._cache[tuple(tokens)] = block_ids
+
+        for block_id in block_ids:
+            self._cache_ref[block_id] += 1
+            if self._cache_ref[block_id] == 1:
+                self._ref[block_id] += 1
+
 
     def _evict_blocks_from_kv_cache(self, n: int) -> None:
         """Attempt to evict least-recently-used cache entries whose blocks are
@@ -139,7 +175,22 @@ class CacheManager:
         always free a block immediately. A block becomes free only when its
         cache ownership drops to zero."""
         # TODO
-        raise NotImplementedError
+        i = 0
+        while n > 0 and i < len(self._lru):
+            key = self._lru[i]
+            bids = self._cache[key]
+
+            if all(self._ref[b] == 1 for b in bids):
+                self._lru.pop(i)
+                self._cache.pop(key)
+                for b in bids:
+                    self._cache_ref[b] -= 1
+                    if self._cache_ref[b] == 0:
+                        self._ref[b] = 0  # Cache no longer owns it
+                        self._free.append(b)
+                        n -= 1
+            else:
+                i += 1 # Block is locked, move to next oldest
 
 
 # ── Task 2: Scheduler ─────────────────────────────────────────────────────────
@@ -213,7 +264,18 @@ class Scheduler:
         See README.md → Task 2 for the full algorithm.
         """
         # TODO
-        raise NotImplementedError
+        if not self.running and not self.waiting:
+            return None
+        elif self.scheduling_policy == SchedulingPolicy.PREFILL_FIRST:
+            if self.waiting or any(req.is_prefilling for req in self.running):
+                return self._schedule_prefill()
+            return self._schedule_decode()
+        else:
+            if any(not req.is_done and not req.is_prefilling for req in self.running):
+                return self._schedule_decode()
+            return self._schedule_prefill()
+
+
 
     def _schedule_prefill(self) -> Batch:
         """
@@ -238,7 +300,64 @@ class Scheduler:
           Keep this batch phase-pure: populate only batch.to_prefill here.
         """
         # TODO
-        raise NotImplementedError
+        batch = Batch(phase=BatchPhase.PREFILL)
+        for req in list(self.running):
+            if not req.is_prefilling or self.token_budget <= 0:
+                continue
+
+            chunk = min(req.remaining_prefill, self.prefill_chunk, self.token_budget)
+            tokens_total_after_chunk = req.num_computed_tokens + chunk
+            blocks_needed_total = self._blocks_for(tokens_total_after_chunk)
+            new_blocks_count = blocks_needed_total - len(req.block_table)
+            
+            if new_blocks_count > 0:
+                new_blocks = self.cache_manager.allocate(new_blocks_count)
+                if new_blocks is None:
+                    self._preempt(req, batch)
+                    continue
+                req.block_table.extend(new_blocks)
+                
+            req.num_computed_tokens += chunk
+            batch.to_prefill.append((req, chunk))
+
+            self.token_budget -= chunk
+
+        while self.waiting and self.token_budget > 0 and len(self.running) < self.max_seqs:
+            req = self.waiting[0]
+
+            matched_blocks = []
+            if self.enable_prefix_caching:
+                handle = self.cache_manager.match_prefix(req.prompt_tokens)
+                if handle.num_matched_tokens > 0:
+                    self.cache_manager.lock(handle)
+                    req.cache_handle = handle
+                    req.prefix_tokens_saved = handle.num_matched_tokens
+                    req.num_computed_tokens = handle.num_matched_tokens
+                    matched_blocks = handle.matched_blocks
+
+            # Allocate remaining blocks
+            needed = self._blocks_for(req.prompt_len) - len(matched_blocks)
+            allocated = self.cache_manager.allocate(needed)
+            if allocated is None:
+                if self.enable_prefix_caching:
+                    self.cache_manager.unlock(handle)
+                    req.cache_handle = None
+                break # no memory available
+
+            self.waiting.popleft()
+            req.block_table = matched_blocks + allocated
+            req.status = RequestStatus.RUNNING
+            self.running.append(req)
+
+            chunk = min(req.remaining_prefill, self.prefill_chunk, self.token_budget)
+            if chunk > 0:
+                req.num_computed_tokens += chunk
+                batch.to_prefill.append((req, chunk))
+                self.token_budget -= chunk
+            
+        return batch
+
+
 
     def _schedule_decode(self) -> Batch:
         """
@@ -252,7 +371,23 @@ class Scheduler:
           Only include decode-ready requests (not still-prefilling ones).
         """
         # TODO
-        raise NotImplementedError
+        batch = Batch(phase=BatchPhase.DECODE)
+        for req in list(self.running):
+            if req.is_done or req.is_prefilling:
+                continue
+            
+            if (req.num_computed_tokens + req.num_generated_tokens) % self.block_size == 0:
+                new_blocks = self.cache_manager.allocate(1)
+                if new_blocks is None:
+                    self._preempt(req, batch)
+                    continue
+
+                req.block_table.extend(new_blocks)
+            
+            batch.to_decode.append(req)
+        return batch
+
+
 
 
 # ── MiniEngine (provided — do not modify) ────────────────────────────────────
